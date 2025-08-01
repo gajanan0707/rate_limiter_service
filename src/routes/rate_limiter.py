@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 from src.models.rate_limiter import DistributedRateLimiter, RequestStatus
 import threading
 
+# Global rate limiter instance (singleton pattern)
 _rate_limiter = None
 _rate_limiter_lock = threading.Lock()
 
@@ -44,11 +45,13 @@ def check_and_consume():
     }
     """
     try:
+        # Validate request data
         if not request.is_json:
             return jsonify({"error": "Request must be JSON"}), 400
 
         data = request.get_json()
 
+        # Validate required fields
         required_fields = [
             "tenant_id",
             "client_id",
@@ -60,6 +63,7 @@ def check_and_consume():
             if field not in data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
 
+        # Validate data types and values
         tenant_id = str(data["tenant_id"])
         client_id = str(data["client_id"])
         action_type = str(data["action_type"])
@@ -83,6 +87,7 @@ def check_and_consume():
         if window_duration_seconds <= 0:
             return jsonify({"error": "window_duration_seconds must be positive"}), 400
 
+        # Validate string fields are not empty
         if not tenant_id.strip() or not client_id.strip() or not action_type.strip():
             return (
                 jsonify(
@@ -91,6 +96,7 @@ def check_and_consume():
                 400,
             )
 
+        # Get rate limiter and process request
         rate_limiter = get_rate_limiter()
         result = rate_limiter.check_and_consume(
             tenant_id=tenant_id,
@@ -100,25 +106,29 @@ def check_and_consume():
             window_duration_seconds=window_duration_seconds,
         )
 
+        # Prepare response
         response_data = {
             "allowed": result.allowed,
             "remaining_requests": result.remaining_requests,
             "status": result.status.value,
         }
 
+        # Include reset_time_seconds only if available
         if result.reset_time_seconds is not None:
             response_data["reset_time_seconds"] = result.reset_time_seconds
 
+        # Set appropriate HTTP status code
         if result.status == RequestStatus.REJECTED:
-            return jsonify(response_data), 429
+            return jsonify(response_data), 429  # Too Many Requests
         elif result.status == RequestStatus.QUEUED:
-            return jsonify(response_data), 202
+            return jsonify(response_data), 202  # Accepted (queued for processing)
         elif not result.allowed:
-            return jsonify(response_data), 429
+            return jsonify(response_data), 429  # Too Many Requests
         else:
-            return jsonify(response_data), 200
+            return jsonify(response_data), 200  # OK
 
     except Exception as e:
+        # Log error in production
         print(f"Error in check_and_consume: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -157,6 +167,7 @@ def get_status(tenant_id, client_id, action_type):
     }
     """
     try:
+        # Validate query parameters
         max_requests = request.args.get("max_requests")
         window_duration_seconds = request.args.get("window_duration_seconds")
 
@@ -193,6 +204,7 @@ def get_status(tenant_id, client_id, action_type):
                 400,
             )
 
+        # Validate path parameters
         if not tenant_id.strip() or not client_id.strip() or not action_type.strip():
             return (
                 jsonify(
@@ -201,6 +213,7 @@ def get_status(tenant_id, client_id, action_type):
                 400,
             )
 
+        # Get status from rate limiter
         rate_limiter = get_rate_limiter()
         status = rate_limiter.get_status(
             tenant_id=tenant_id,
@@ -213,6 +226,7 @@ def get_status(tenant_id, client_id, action_type):
         return jsonify(status), 200
 
     except Exception as e:
+        # Log error in production
         print(f"Error in get_status: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -245,6 +259,7 @@ def health_check():
         )
 
 
+# Graceful shutdown handler
 def shutdown_rate_limiter():
     """Shutdown the rate limiter gracefully."""
     global _rate_limiter

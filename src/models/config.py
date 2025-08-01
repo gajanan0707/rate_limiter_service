@@ -39,19 +39,23 @@ class TenantConfig:
 
     tenant_id: str
     load_manager: LoadManagerConfig = field(default_factory=LoadManagerConfig)
+    # Per-action-type rate limits
     action_limits: Dict[str, RateLimitConfig] = field(default_factory=dict)
+    # Per-client-id rate limits (overrides action limits)
     client_limits: Dict[str, Dict[str, RateLimitConfig]] = field(default_factory=dict)
 
     def get_rate_limit_config(
         self, client_id: str, action_type: str
     ) -> Optional[RateLimitConfig]:
         """Get rate limit configuration for a specific client and action."""
+        # Check client-specific limits first
         if (
             client_id in self.client_limits
             and action_type in self.client_limits[client_id]
         ):
             return self.client_limits[client_id][action_type]
 
+        # Fall back to action-type limits
         if action_type in self.action_limits:
             return self.action_limits[action_type]
 
@@ -67,6 +71,7 @@ class ConfigurationManager:
         self._global_config = LoadManagerConfig()
         self._lock = threading.RLock()
 
+        # Load configuration from file if provided
         if config_file_path and os.path.exists(config_file_path):
             self.load_from_file(config_file_path)
 
@@ -74,6 +79,7 @@ class ConfigurationManager:
         """Get configuration for a specific tenant."""
         with self._lock:
             if tenant_id not in self._tenant_configs:
+                # Create default configuration for new tenant
                 self._tenant_configs[tenant_id] = TenantConfig(
                     tenant_id=tenant_id, load_manager=LoadManagerConfig()
                 )
@@ -141,6 +147,7 @@ class ConfigurationManager:
                 data = json.load(f)
 
             with self._lock:
+                # Load global configuration
                 if "global" in data:
                     global_data = data["global"]
                     self._global_config = LoadManagerConfig(
@@ -152,10 +159,12 @@ class ConfigurationManager:
                         ),
                     )
 
+                # Load tenant configurations
                 if "tenants" in data:
                     for tenant_id, tenant_data in data["tenants"].items():
                         tenant_config = TenantConfig(tenant_id=tenant_id)
 
+                        # Load tenant load manager config
                         if "load_manager" in tenant_data:
                             lm_data = tenant_data["load_manager"]
                             tenant_config.load_manager = LoadManagerConfig(
@@ -181,6 +190,7 @@ class ConfigurationManager:
                                     )
                                 )
 
+                        # Load client limits
                         if "client_limits" in tenant_data:
                             for client_id, client_data in tenant_data[
                                 "client_limits"
@@ -223,12 +233,14 @@ class ConfigurationManager:
                         "client_limits": {},
                     }
 
+                    # Save action limits
                     for action_type, config in tenant_config.action_limits.items():
                         tenant_data["action_limits"][action_type] = {
                             "max_requests": config.max_requests,
                             "window_duration_seconds": config.window_duration_seconds,
                         }
 
+                    # Save client limits
                     for (
                         client_id,
                         client_actions,
